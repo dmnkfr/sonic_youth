@@ -25,6 +25,9 @@ library(wordcloud)
 library(hrbrthemes)
 library(stm)
 library(furrr)
+library(topicmodels)
+library(ldatuning)
+library(topicdoc)
 
 # Genius token: frBVSmYqTcAm9awzKE8HeNrsXFTSv_5cjdrFBTUh3oUnughftDiSBXf-V0UB5OZ2
 
@@ -37,7 +40,7 @@ punk_colors = rep(c("#453E46", "#CF3E60", "#E68A5D", "#C9C79A", "#57989D"),3)
 sy_colors = c("#832B27", "#CD5A42", "#B7C3DF", "#63666B")
 
 # Some helpers
-records_by_year = c("Confusion Is Sex", "Bad Moon Rising", "EVOL",
+albums_by_year = c("Confusion Is Sex", "Bad Moon Rising", "EVOL",
                     "Sister", "Daydream Nation", "Goo ", "Dirty",
                     "Experimental Jet Set, Trash and No Star",
                     "Washing Machine", "A Thousand Leaves", 
@@ -162,7 +165,7 @@ lyrics_studio = lyrics %>%
 lyrics_studio %>% 
   group_by(album) %>% 
   summarize(nr_of_songs = n_distinct(song)) %>% 
-  arrange(nr_of_songs) %>%
+  arrange(desc(nr_of_songs)) %>%
   kable()
 ```
 
@@ -232,7 +235,7 @@ A quick and dirty count of words per song.
 
 ```{r plot-words-per-song, message=FALSE, results = "hide"}
 words_per_song = lyrics_studio %>% 
-  group_by(album, song) %>% 
+  group_by(year, album, song) %>% 
   # paste all the lines per album
   summarize(album_lyrics = paste0(line, collapse = " ")) %>%
   # replace commas (they sometimes have no space afterwards, e.g. test,test)
@@ -250,7 +253,7 @@ words_per_song = lyrics_studio %>%
 short_long = words_per_song %>% 
   filter(number_unique_words_per_song > 200 | number_unique_words_per_song < 6)
 
-ggplot(data = words_per_song, aes(x = reorder(album, number_unique_words_per_song), y = number_unique_words_per_song, label = song)) +
+ggplot(data = words_per_song, aes(x = reorder(album, -year), y = number_unique_words_per_song, label = song)) +
   geom_point(shape = 1, size = 3.3, color = punk_colors[5], alpha = 0.7, stroke = 1) +
   geom_point(data = short_long, 
              aes(x = reorder(album, number_unique_words_per_song), 
@@ -279,7 +282,7 @@ ggplot(data = words_per_song, aes(x = reorder(album, number_unique_words_per_son
 <br/>
 
 |          ***Lightning***
-|          ***Lightning strike***\_
+|          ***Lightning strike***
 |          ***Lightning strikes***
 |          ***Lightning strike me***
 |          ***Lightning strikes me***
@@ -371,7 +374,11 @@ time"](https://genius.com/Sonic-youth-i-love-her-all-the-time-lyrics).
 Words are words are words but what are the topics Sonic Youth sings about? Let's do some topic modeling.
 
 ### But what are they singin bout? Modeling topics in Sonic Youth's lyrics.
+
+First, let's check the most important words for each album. We can do this by calculating the relative importance with a measure called [tf-idf.](https://monkeylearn.com/blog/what-is-tf-idf/)
 ```{r checkingtd-idf, eval=TRUE, message=FALSE, fig.dim = c(14,10)}
+lyrics_studio = readRDS("./interim/sonic_youth_lyrics_studio_albums.RDS")
+
 tidy_lyrics = lyrics_studio %>%
   drop_na() %>% 
   unnest_tokens(word, line, token = "words") %>%
@@ -390,7 +397,7 @@ lyrics_tf_idf = tidy_lyrics %>%
 
 lyrics_tf_idf %>%
     mutate(word = reorder_within(word, tf_idf, album),
-           album = factor(album, levels=records_by_year)) %>%
+           album = factor(album, levels=albums_by_year)) %>%
     ggplot(aes(word, tf_idf, fill = album)) +
     geom_col(alpha = 0.8, show.legend = FALSE, fill = punk_colors[2]) +
     facet_wrap(~ album, scales = "free", ncol = 5) +
@@ -403,19 +410,202 @@ lyrics_tf_idf %>%
          subtitle = "Highest tf-idf words in Sonic Youth's albums")
 ```
 
+</br>
+So, _inhuman_ is an important word for the record "Confusion is Sex". Why could that be?
+</br></br>
 
+|          ***Complete inhuman***
+|          ***Complete inhuman***
+|          ***Complete inhuman***
+|          ***Complete inhuman***
+|          ***Inhu-inhuman***
+|          ***Inhu-inhuman***
+|          ***Inhuman***
+|          ***Inhuman***
+|          ***Inhuman***
+|          ***Inhuman***
+|          ***Inhuman***
+|          ***Inhuman***
+|          (From the song [*Inhuman*)](https://www.youtube.com/watch?v=elVZgK9ZRoE)
+</br>
+Oh, I see. Likewise, _goo_ seems to be important on the record "Goo". Here's why:
+</br></br>
 
+|          ***Goo Goo Goo***
+|          ***Goo Goo Goo***
+|          ***Goo Goo Goo***
+|          ***My friend Goo***
+|          ***Goo Goo Goo***
+|          ***Talkin' 'bout Goo***
+|          ***Goo Goo Goo***
+|          ***My friend Goo***
+|          ***Goo Goo Goo***
+|          ***You would too***
+|          ***Goo***
+|          (From the song [*Goo*)](https://www.youtube.com/watch?v=kfwIFTsx8WE)
+</br>
+Makes sense. So do the words for the other albums (Ohrwurm triggered again). And the words themselves make pretty nice poetry as well:
+</br></br>
 
+|          ***Uh***
+|          ***La***
+|          ***Poison Arrow***
+|          ***Whoa!***
 
+</br></br>
 
+__Grymt!__ Now that we know that the individual albums have _very_ different most important words, we got a first idea of  lyrical force of Sonic Youth.
+</br></br>
+To get a better understanding of the themes they sing about, we can train a model that extracts topics from the lyrics. Here, we do this with an [LDA](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation) [topic model.](https://en.wikipedia.org/wiki/Topic_model)
+</br></br>
 
-```{r topic-model-setup, message=FALSE, results="hide"}
+```{r topic-model-setup, eval=FALSE, message=FALSE, include=FALSE, results="hide"}
+# convert dfm to topicmodels object
+lyrics_topicmodel <- convert(lyrics_dfm, to = "topicmodels")
+saveRDS(lyrics_topicmodel, "./interim/lyrics_topicmodel.RDS")
+# First, we test what's the optimal number of topics.
+# Time the code execution
+start_time <- Sys.time()
 
+n_of_topics <- FindTopicsNumber(
+  lyrics_topicmodel,
+  topics = seq(from = 5, to = 80, by = 5),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 77),
+  mc.cores = 4L,
+  verbose = TRUE
+)
+
+# clock time
+end_time <- Sys.time()
+time_passed <- end_time - start_time
+print(time_passed)
+
+saveRDS(n_of_topics, "./interim/number_of_topics_for_plotting.RDS")
 ```
+
+```{r plot-k-test, eval=FALSE, include=FALSE}
+n_of_topics = readRDS("./interim/number_of_topics_for_plotting.RDS")
+FindTopicsNumber_plot(n_of_topics)
+````
 
 ```{r topic-model-train, message=FALSE, results="show", eval=FALSE}
+#Run LDA() from topicmodels package with n_topics; doesn't take long
+lyrics_topicmodel = readRDS("./interim/lyrics_topicmodel.RDS")
 
+# Time the code execution
+start_time <- Sys.time()
+
+n_topics = 15
+lyrics_topicmodel_15 <- LDA(lyrics_topicmodel, n_topics)
+
+# clock time
+end_time <- Sys.time()
+time_passed <- end_time - start_time
+print(time_passed)
+
+saveRDS(lyrics_topicmodel_15, "./interim/lyrics_topicmodel_15.RDS")
+```
+```{r get model metrics, eval=TRUE, fig.dim = c(14,10), include=FALSE}
+# Get model metrics with topic doc package
+# See http://mallet.cs.umass.edu/diagnostics.php for interpretation of measures
+# get model
+lyrics_topicmodel_15 = readRDS("./interim/lyrics_topicmodel_15.RDS")
+lyrics_topicmodel = readRDS("./interim/lyrics_topicmodel.RDS")
+
+# run diagnostics on model
+diagnostics_df = topic_diagnostics(lyrics_topicmodel_15, lyrics_topicmodel)
+
+# arrange the metrics
+diag_df = diagnostics_df %>%
+  mutate(topic_label = topicmodels::terms(lyrics_topicmodel_15, 5) %>%
+           apply(2, paste, collapse = ", "),
+         topic_label = paste(topic_num, topic_label, sep = " - "))
+
+# plot the model metrics
+diag_df %>% 
+  gather(diagnostic, value, -topic_label, -topic_num) %>%
+  ggplot(aes(x = topic_num, y = value,
+             fill = str_wrap(topic_label, 25))) +
+  geom_bar(stat = "identity", fill = punk_colors[5]) +
+  theme_ipsum()+
+  facet_wrap(~diagnostic, scales = "free") +
+  labs(x = "Topic Number", y = "Diagnostic Value",
+       fill = "Topic Label", title = "All Topic Model Diagnostics")
+
+# Second, get the perplexity score of the entire model
+# perplexity_score = perplexity(lyrics_topicmodel_15)
+# perplexity_score
 ```
 
+```{r plot-model, results='hide', fig.dim = c(14,10)}
+# transform into tidy data frame
+lyrics_topics = tidy(lyrics_topicmodel_15, matrix = "beta")
 
+# for each topic, obtain the top 10 words by beta
+lyrics_topics_words = lyrics_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%  # top words based on informativeness
+  ungroup() %>%
+  arrange(topic, beta) %>%
+  mutate(order = row_number()) 
 
+# plot
+ggplot(lyrics_topics_words, aes(order, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE, fill = sy_colors[2]) +
+  facet_wrap(~ topic, scales = "free", ncol = 5) +
+  theme_ipsum() +
+  # Add categories to axis
+  scale_x_continuous(
+    breaks = lyrics_topics_words$order,
+    labels = lyrics_topics_words$term,
+    expand = c(0,0)
+  ) +
+  coord_flip()
+```
+</br></br>
+We asked the model to extract 15 topics from all the lyrics and 15 topics we got! Let's first look at how common they are and how they distribute over the individual records, and then zoom in a bit more.
+</br></br>
+And, note again that some of the words look strange because they have been modified to make it easier for a computer to understand them (e.g., _nature_ becomes _natur_, _something_ becomes _someth_)
+
+``` {r plot-topics2, eval=TRUE, fig.dim = c(8,6)}
+# Get Bet and Gamma values
+td_beta = tidy(lyrics_topicmodel_15, matrix=c("beta"))
+#td_beta
+td_gamma = tidy(lyrics_topicmodel_15, matrix = "gamma")
+#td_gamma
+
+# arrange and plot
+top_terms = td_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(7, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest()
+
+gamma_terms = td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms %>%
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE, fill = punk_colors[4]) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.13),
+                     labels = percent_format()) +
+  theme_ipsum() +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence in the 1 % stratified random sample",
+       subtitle = "With the top words that contribute to each topic")
+
+```
