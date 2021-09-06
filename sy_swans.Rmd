@@ -1,0 +1,542 @@
+---
+title: 'Repetition and noise: The words of Sonic Youth and Swans'
+author: Dominik Freunberger
+output: 
+  hrbrthemes::ipsum:
+    toc: true
+    code_folding: hide
+editor_options:
+  chunk_output_type: inline
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include=FALSE, eval=TRUE}
+library(tidyverse)
+library(tidytext)
+library(tidymodels)
+library(caret)
+library(quanteda)
+library(quanteda.textstats)
+library(geniusr)
+library(tictoc)
+library(knitr)
+library(wordcloud)
+library(hrbrthemes)
+library(stm)
+library(furrr)
+library(topicmodels)
+library(ldatuning)
+library(topicdoc)
+library(gridExtra)
+
+# Genius token: frBVSmYqTcAm9awzKE8HeNrsXFTSv_5cjdrFBTUh3oUnughftDiSBXf-V0UB5OZ2
+
+# get the stopwords from the SMART source in tidytext stopwords
+smart_stopwords = get_stopwords(source = "smart")
+smart_stopwords = c(smart_stopwords$word, "we'r")
+
+# define some color pals
+sw_colors = c("#AE9166", "#AE2223", "#FFB50D", "#535250")
+sy_colors = c("#832B27", "#CD5A42", "#B7C3DF", "#63666B")
+other_colors = rep(c("#453E46", "#CF3E60", "#E68A5D", "#C9C79A", "#57989D"),3)
+
+# Some helpers
+sw_albums_year = data.frame(album = c("Filth", "Cop", "Greed", "Holy Money", "Children of God",
+                      "The Burning World", "White Light from the Mouth of Infinity",
+                      "Love of Life", "The Great Annihilator", "Soundtracks for the Blind",
+                      "My Father Will Guide Me Up a Rope to the Sky", "The Seer",
+                      "To Be Kind", "The Glowing Man", "leaving meaning."),
+                      year = c(1983, 1984, 1986, 1986, 1987, 1989, 1991, 1992,
+                      1995, 1996, 2010, 2012, 2014, 2016, 2019))
+
+sw_albums_by_year = sw_albums_year$album
+
+sy_albums_year = data.frame(album = c("Confusion Is Sex", "Bad Moon Rising", "EVOL",
+                    "Sister", "Daydream Nation", "Goo ", "Dirty",
+                    "Experimental Jet Set, Trash and No Star",
+                    "Washing Machine", "A Thousand Leaves", 
+                    "NYC Ghosts & Flowers", "Murray Street", "Sonic Nurse",
+                    "Rather Ripped", "The Eternal"),
+                    year = c(1983, 1985, 1986, 1987, 1988, 1990, 1992, 1994,
+                             1995, 1998, 2000, 2002, 2004, 2006, 2009))
+                    
+sy_albums_by_year = sy_albums_year$album
+
+```
+by Dominik Freunberger
+<br/><br/>
+[![](images/sy_swans.jpeg "Members of Sonic Youth and Swans")](https://www.reddit.com/r/OldSchoolCool/comments/m303cy/members_of_the_bands_that_would_become_sonic/)
+<br/><br/>
+
+|      ***No pain, no death, no fear, no hate***
+|      ***No time, no now, no suffering***
+|      ***No touch, no loss, no hand, no sense***
+|      ***No wound, no waste, no lust, no fear***
+|      ***No mind, no greed, no suffering***
+|      ***No thought, no hurt, no hands to reach***
+|      ***No knife, no words, no lie, no cure***
+|      ***No need, no hate, no will, no speech***
+|      (From the Swans song [*Screen Shot*)](https://www.youtube.com/watch?v=6qDq9eGUmMI)
+<br/><br/>
+
+|      ***Can you please pass me a jug of winter light?***
+|      ***Fold me in an ocean's whim?***
+|      ***In sweet corrosive fire light?***
+|      ***In the city made of tin?***
+|      ***Are you famous under the skin?***
+|      ***Familiar with the things you wanted?***
+|      ***Able now to take it all in?***
+|      ***Making peace with every hole in the story?***
+|      (From the Sonic Youth song [*NYC Ghosts & Flowers*)](https://www.youtube.com/watch?v=bqnkMEnU0iI)
+
+
+<br/> <br/> 
+The NYC no wave/noise rock/post punk bands **Sonic Youth** and **Swans** are not
+only known for their eccentric and hypnotic noise landscapes but equally well for
+their intricate lyrics. While Sonic Youth's lyrics are deeply rooted in the tradition-less tradition of
+modern American poetry, listening to Swans often is reminiscent of going to a church full of noise when singer Michael Gira recites his ecclesiastical texts in their maelstrom of noise. What both bands share is their love for repetition and noise.
+
+Here I will take a deep dive into the words of each of the two bands' 15 studio
+records between 1983 and 2019.
+
+I'll get the lyrics from Genius' API. You need a genius account and
+create an API client on <https://genius.com/api-clients> for this.
+
+```{r get-lyrics, eval=FALSE, include=TRUE, message=FALSE}
+# enter genius token when prompted:
+genius_token()
+
+# Find artist ID for Swans
+artist = search_artist("Swans")
+songs = get_artist_songs_df(artist$artist_id[1]) 
+
+# Get all song IDs
+ids = c(as.character(songs$song_id))
+
+# Create empty dataframe for the lyrics
+sw_lyrics = data.frame()
+
+# Add lyrics to df. This takes a long while.
+# for (id in ids) {
+#   lyrics = rbind(get_lyrics_id(id), lyrics)
+#   print(id)
+# }
+
+# The loop above crashes after a while for an unknown reason. 
+# I found the solution below on
+# https://www.r-bloggers.com/2021/01/scraping-analysing-and-visualising-lyrics-in-r/
+tic()
+while (length(ids) > 0) {
+  for (id in ids) {
+    tryCatch({
+      sw_lyrics = rbind(get_lyrics_id(id), sw_lyrics)
+      successful = unique(sw_lyrics$song_id)
+      ids = ids[!ids %in% successful]
+      print(paste("done - ", id))
+      print(paste("New length is ", length(ids)))
+    }, error = function(e){})
+  }
+}
+toc()
+
+# it get's only 244 of 265 songs listed on Genius; reason unknown. But okej.
+# add album info
+all_ids = data.frame(song_id = unique(sw_lyrics$song_id))
+all_ids$album = ""
+
+for (song in all_ids$song_id) {
+  all_ids[match(song,all_ids$song_id),2] = get_song_df(song)[12]
+  print(song)
+}
+
+# join lyrics with album info
+sw_lyrics = full_join(all_ids, sw_lyrics)
+
+# get only studio albums, get rid of unused cols and rename them
+sw_lyrics = sw_lyrics %>%
+  filter(album %in% sw_albums_year$album) %>% 
+  left_join(sw_albums_year) %>% 
+  select(artist_name, album, year, song_name, song_id, section_name, line) %>% 
+  rename(artist = artist_name, song = song_name, section = section_name)
+
+
+saveRDS(sw_lyrics, "./interim/swans_lyrics_tidy.RDS")
+
+### Now the same for Sonic Youth
+# Find artist ID for Sonic Youth
+artist = search_artist("Sonic Youth")
+songs = get_artist_songs_df(artist$artist_id[1]) 
+
+# Get all song IDs
+ids = c(as.character(songs$song_id))
+
+# Create empty dataframe for the lyrics
+sy_lyrics = data.frame()
+
+# Add lyrics to df. This takes a long while.
+# for (id in ids) {
+#   lyrics = rbind(get_lyrics_id(id), lyrics)
+#   print(id)
+# }
+
+# The loop above crashes after a while for an unknown reason. 
+# I found the solution below on
+# https://www.r-bloggers.com/2021/01/scraping-analysing-and-visualising-lyrics-in-r/
+tic()
+while (length(ids) > 0) {
+  for (id in ids) {
+    tryCatch({
+      sy_lyrics = rbind(get_lyrics_id(id), sy_lyrics)
+      successful = unique(sy_lyrics$song_id)
+      ids = ids[!ids %in% successful]
+      print(paste("done - ", id))
+      print(paste("New length is ", length(ids)))
+    }, error = function(e){})
+  }
+}
+toc()
+
+# it get's only 277 of 419 songs listed on Genius; reason unknown. But okej.
+# add album info
+all_ids = data.frame(song_id = unique(sy_lyrics$song_id))
+all_ids$album = ""
+
+for (song in all_ids$song_id) {
+  all_ids[match(song,all_ids$song_id),2] = get_song_df(song)[12]
+  print(song)
+}
+
+# join lyrics with album info
+sy_lyrics = full_join(all_ids, sy_lyrics)
+
+# get only studio albums, get rid of unused cols and rename them
+sy_lyrics = sy_lyrics %>%
+  filter(album %in% sy_albums_year$album) %>% 
+  left_join(sy_albums_year) %>% 
+  select(artist_name, album, year, song_name, song_id, section_name, line) %>% 
+  rename(artist = artist_name, song = song_name, section = section_name) 
+
+saveRDS(sy_lyrics, "./interim/sonic_youth_lyrics_tidy.RDS")
+
+length(unique(sw_lyrics$song))
+length(unique(sy_lyrics$song))
+
+```
+
+**Fantastic!** We got 4602 lines of poetry from 149 Sonic Youth song and 4407 lines of prayers from 146 Swans songs. Let's see how many songs are on each of the records.
+
+```{r combine-lyrics, eval=FALSE}
+sy_lyrics = readRDS("./interim/sonic_youth_lyrics_tidy.RDS")
+sw_lyrics = readRDS("./interim/swans_lyrics_tidy.RDS")
+
+### Combine the two and delete songs that are just the ablum art
+lyrics = rbind(sy_lyrics, sw_lyrics)
+lyrics = lyrics %>% 
+  filter(!str_detect(song, "Album Art"))
+
+saveRDS(lyrics, "./interim/lyrics_tidy.RDS")
+````
+
+```{r print-tables, message=FALSE, results="show"}
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+t1 = lyrics %>% 
+  filter(artist == "Swans") %>% 
+  group_by(album) %>% 
+  summarize(nr_of_songs = n_distinct(song)) %>% 
+  arrange(desc(nr_of_songs))
+
+t2 = lyrics %>% 
+  filter(artist == "Sonic Youth") %>% 
+  group_by(album) %>% 
+  summarize(nr_of_songs = n_distinct(song)) %>% 
+  arrange(desc(nr_of_songs))
+
+kable(list(t1, t2), caption = c("Swans", "Sonic Youth"))
+```
+
+<br/> Let's explore the words in this noise
+rock landscape!
+
+### How many words do they use on each album?
+
+```{r plot-words-per-records, message=FALSE, warning=FALSE, results = "hide", fig.dim = c(14,5)}
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+sw_nr_words_plot = lyrics %>% 
+  filter(artist == "Swans") %>% 
+  mutate(words_per_line = sapply(strsplit(line, " "), length)) %>% 
+  group_by(year, album) %>% 
+  summarize(number_of_words = sum(words_per_line)) %>% 
+  ggplot(aes(x = reorder(album, -year), y = number_of_words)) + 
+  geom_col(fill = sw_colors[3])+
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = "Album by year",
+       y = " ",
+       title = "Words per album",
+       subtitle = "Swans")
+
+sy_nr_words_plot = lyrics %>% 
+  filter(artist == "Sonic Youth") %>% 
+  mutate(words_per_line = sapply(strsplit(line, " "), length)) %>% 
+  group_by(year, album) %>% 
+  summarize(number_of_words = sum(words_per_line)) %>% 
+  ggplot(aes(x = reorder(album, -year), y = number_of_words)) + 
+  geom_col(fill = sy_colors[3])+
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = " ",
+       y = "Number of words",
+       title = " ",
+       subtitle = "Sonic Youth")
+
+grid.arrange(sw_nr_words_plot, sy_nr_words_plot, ncol = 2)
+```
+
+
+### How long are their lyrics per song?
+
+A quick and dirty count of unique words per song. We exclude all the la la la's and uh uh uh's.
+
+```{r plot-words-per-song, message=FALSE, results = "hide", fig.dim = c(13,5)}
+sw_words_per_song = lyrics %>% 
+  filter(artist == "Swans") %>% 
+  group_by(year, album, song) %>% 
+  # paste all the lines per album
+  summarize(album_lyrics = paste0(line, collapse = " ")) %>%
+  # replace commas (they sometimes have no space afterwards, e.g. test,test)
+  mutate(album_lyrics = gsub("\\,", " ", album_lyrics)) %>%
+  # lowercase the words
+  mutate(album_lyrics = tolower(album_lyrics)) %>%
+  # delete special characters
+  mutate(album_lyrics = str_replace_all(album_lyrics, "[[:punct:]]", " ")) %>% 
+  mutate(unique_words_per_song = sapply(strsplit(album_lyrics, " "), unique)) %>% 
+  mutate(number_unique_words_per_song = as.numeric(lapply(unique_words_per_song, length))) %>% 
+  arrange(desc(number_unique_words_per_song))
+
+# let's get the shortest and the longest
+sw_short_long = sw_words_per_song %>% 
+  filter(number_unique_words_per_song > 200 | number_unique_words_per_song < 3)
+
+sw_words_per_song_plot = ggplot(data = sw_words_per_song, aes(x = reorder(album, -year), y = number_unique_words_per_song, label = song)) +
+  geom_point(shape = 1, size = 3.3, color = sw_colors[3], alpha = 0.7, stroke = 1) +
+  geom_point(data = sw_short_long, 
+             aes(x = reorder(album, number_unique_words_per_song), 
+                 y = number_unique_words_per_song),
+             shape = 1, size = 3.3, color = sw_colors[2], stroke = 1) +
+  geom_text(aes(label=ifelse(number_unique_words_per_song<3,as.character(song),'')),hjust=-0.1,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(number_unique_words_per_song>200,as.character(song),'')),hjust=1.05,vjust=0, size = 3) + 
+  theme(legend.position = "none") +
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = "Album by year",
+       y = " ",
+       title = "Number of unique words",
+       subtitle = "Swans")
+
+### Sonic Youth
+
+sy_words_per_song = lyrics %>% 
+  filter(artist == "Sonic Youth") %>% 
+  group_by(year, album, song) %>% 
+  # paste all the lines per album
+  summarize(album_lyrics = paste0(line, collapse = " ")) %>%
+  # replace commas (they sometimes have no space afterwards, e.g. test,test)
+  mutate(album_lyrics = gsub("\\,", " ", album_lyrics)) %>%
+  # lowercase the words
+  mutate(album_lyrics = tolower(album_lyrics)) %>%
+  # delete special characters
+  mutate(album_lyrics = str_replace_all(album_lyrics, "[[:punct:]]", " ")) %>% 
+  mutate(unique_words_per_song = sapply(strsplit(album_lyrics, " "), unique)) %>% 
+  mutate(number_unique_words_per_song = as.numeric(lapply(unique_words_per_song, length))) %>% 
+  arrange(desc(number_unique_words_per_song))
+
+# let's get the shortest and the longest
+sy_short_long = sy_words_per_song %>% 
+  filter(number_unique_words_per_song > 200 | number_unique_words_per_song < 6)
+
+sy_words_per_song_plot = ggplot(data = sy_words_per_song, aes(x = reorder(album, -year), y = number_unique_words_per_song, label = song)) +
+  geom_point(shape = 1, size = 3.3, color = sy_colors[3], alpha = 0.7, stroke = 1) +
+  geom_point(data = sy_short_long, 
+             aes(x = reorder(album, number_unique_words_per_song), 
+                 y = number_unique_words_per_song),
+             shape = 1, size = 3.3, color = sy_colors[2], stroke = 1) +
+  geom_text(aes(label=ifelse(number_unique_words_per_song<6,as.character(song),'')),hjust=-0.1,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(number_unique_words_per_song>200,as.character(song),'')),hjust=1.05,vjust=0, size = 3) + 
+  theme(legend.position = "none") +
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = " ",
+       y = "Number of words",
+       title = " ",
+       subtitle = "Sonic Youth")
+
+grid.arrange(sw_words_per_song_plot, sy_words_per_song_plot, ncol = 2)
+
+```
+
+|          ***AAAAH*** 
+|          ***AAAAH*** 
+|          ***AAAAH***
+|          ***AAAAH***
+|          ***AAAAH***
+|          ***AAAAH***
+|          ***AAAAH***
+|          (From the Swans song [*YRP2*)](https://www.youtube.com/watch?v=JxK1WJR8yoo)
+
+<br/><br/>
+
+|          ***Lightning***
+|          ***Lightning strike***
+|          ***Lightning strikes***
+|          ***Lightning strike me***
+|          ***Lightning strikes me***
+|          ***Lightning strike me down***
+|          ***Lightning strikes me down***
+|          (From the Sonic Youth song [*Lightning*)](https://www.youtube.com/watch?v=N_64Sh42uW4)
+
+<br/> Repetitive lyrics always get me! Five unique words (because we did
+not stem *strikes* to *strike*, yet)! Though, admittedly, this closing
+song is clearly an ode to anti-art and rather a convulsion of guitar
+squeaks and spoken boredom. <br/> The other end of this spectrum marks
+the song [*In the Kingdom
+\#19*](https://www.youtube.com/watch?v=jUegc5J8iZk), a gripping [piece
+of poetry](https://genius.com/Sonic-youth-in-the-kingdom-19-lyrics) with
+dystopic guitars that seems to be a young descendant of
+[*Howl*](https://www.poetryfoundation.org/poems/49303/howl). 230 unique
+words, and, except for the chorus, quite the opposite of repetitiveness.
+<br/> Now that we have some ballpark figures about how short or long
+their lyrics are, let's have a look at what words they actually use (a
+lot).
+
+```{r process-tokens, eval=FALSE, warning=FALSE}
+# concatenate lines to lyrics per song (so that each song is a document)
+sw_lyrics_song = sw_lyrics %>% 
+  group_by(artist, album, year, song) %>% 
+  summarise(lyrics = paste0(line, collapse = " "))
+# tokenize
+sw_tokens = tokens(sw_lyrics_song$lyrics, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Stem the tokens
+sw_tokens = tokens_wordstem(sw_tokens, language = "english")
+
+# Lowercase the tokens
+sw_tokens = tokens_tolower(sw_tokens)
+
+# Remove stopwords
+sw_tokens = tokens_remove(sw_tokens, c(stopwords("english"),
+                                       smart_stopwords, "you'r"))
+# remove two letter tokens
+sw_tokens = tokens_select(sw_tokens, min_nchar = 3)
+
+# Add bigrams and trigrams to our feature matrix
+sw_tokens = tokens_ngrams(sw_tokens, n = 1:3)
+
+# add meaningful doc names instead of text 1, text 2, ...
+doc_id = paste(1:nrow(sw_lyrics_song), sw_lyrics_song$song_id, sep = "_")
+docnames(sw_tokens) <- doc_id
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+sw_dfm = dfm(sw_tokens, tolower = FALSE)
+
+# calculate frequencies
+sw_word_freq = textstat_frequency(sw_dfm, n = 200)
+
+### the same for sonic youth
+sy_lyrics_song = sy_lyrics %>% 
+     group_by(artist, album, year, song) %>% 
+    summarise(lyrics = paste0(line, collapse = " "))
+
+sy_tokens = tokens(sy_lyrics_song$lyrics, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Stem the tokens
+sy_tokens = tokens_wordstem(sy_tokens, language = "english")
+
+# Lowercase the tokens
+sy_tokens = tokens_tolower(sy_tokens)
+
+# Remove stopwords
+sy_tokens = tokens_remove(sy_tokens, 
+                                      c(stopwords("english"), 
+                                        smart_stopwords, "you'r"))
+# remove two letter tokens
+sy_tokens = tokens_select(sy_tokens, min_nchar = 3)
+
+# Add bigrams and trigrams to our feature matrix
+sy_tokens = tokens_ngrams(sy_tokens, n = 1:3)
+
+# add meaningful doc names instead of text 1, text 2, ...
+doc_id = paste(1:nrow(sy_lyrics_song), sy_lyrics_song$song_id, sep = "_")
+docnames(sy_tokens) <- doc_id
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+sy_dfm = dfm(sy_tokens, tolower = FALSE)
+
+# calculate frequencies
+sy_word_freq = textstat_frequency(sy_dfm, n = 200)
+
+saveRDS(sy_word_freq, "./interim/sy_word_freq.RDS")
+saveRDS(sw_word_freq, "./interim/sw_word_freq.RDS")
+```
+
+```{r wordclouds, results="hide", fig.dim=c(13,8)}
+# word cloud with the n most frequent terms
+sy_word_freq = readRDS("./interim/sy_word_freq.RDS")
+sw_word_freq = readRDS("./interim/sw_word_freq.RDS")
+
+par(mfrow=c(1,2))
+set.seed(42)
+wordcloud(words = sw_word_freq$feature, 
+          freq = sw_word_freq$frequency, max.words = 100,
+          random.order = FALSE,         
+          color = sw_colors)
+
+wordcloud(words = sy_word_freq$feature, 
+          freq = sy_word_freq$frequency, max.words = 100,
+          random.order = FALSE,         
+          color = sy_colors)
+```
+
+```{r frequent_words, message=FALSE, results="show", fig.dim=c(7,5)}
+# frequent words
+sw_frequent_words = as.data.frame(sw_word_freq)
+sy_frequent_words = as.data.frame(sy_word_freq)
+
+frequent_words = rbind(sw_frequent_words, sy_frequent_words)
+frequent_words$artist = rep(c("Swans", "Sonic Youth"), each = 200)
+  
+frequent_words %>%
+  rename(word = feature) %>% 
+  group_by(word) %>% 
+  filter(frequency > 30) %>% 
+    filter(n()>1) %>%
+  group_by(artist) %>% 
+  ggplot(aes(x = reorder(word, frequency), y = reorder(artist, desc(artist)))) +
+  geom_point(aes(size = frequency), 
+             shape = 1, color = rep(c(sw_colors[3], sy_colors[3]), each = 14), stroke = 1.2,
+             position = position_nudge(y = -0.06)) +
+  geom_point(aes(size = docfreq), 
+             shape = 16, color = rep(c(sw_colors[3], sy_colors[3]), each = 14), stroke = 1.2,
+             position = position_nudge(y = 0.06)) +
+  geom_text(aes(label=ifelse(frequency > 200,paste(as.character(frequency), " times"),"")),
+            hjust=1.5,vjust=0, size = 3) +
+    geom_text(aes(label=ifelse(artist == "Swans" & word == "love",paste("on ", as.character(docfreq), " songs"),"")),
+            hjust=-0.4,vjust=0, size = 3) +
+    geom_text(aes(label=ifelse(docfreq > 60,paste("on ", as.character(docfreq), " songs"),"")),
+            hjust=-0.5,vjust=0, size = 3) +
+  coord_flip() +
+  theme_ipsum() +
+  labs(x = "Word",
+       y = "Artist",
+       title = "Most used words of both bands",
+       subtitle = "Sonic Youth")
+
+```
