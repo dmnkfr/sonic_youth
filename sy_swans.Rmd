@@ -3,8 +3,8 @@ title: 'Repetition and noise: The words of Sonic Youth and Swans'
 author: Dominik Freunberger
 output: 
   hrbrthemes::ipsum:
-    toc: true
     code_folding: hide
+    toc: true
 editor_options:
   chunk_output_type: inline
   markdown:
@@ -29,6 +29,11 @@ library(topicmodels)
 library(ldatuning)
 library(topicdoc)
 library(gridExtra)
+library(widyr)
+library(ggraph)
+library(igraph)
+
+
 
 # Genius token: frBVSmYqTcAm9awzKE8HeNrsXFTSv_5cjdrFBTUh3oUnughftDiSBXf-V0UB5OZ2
 
@@ -416,6 +421,7 @@ lot).
 sw_lyrics_song = sw_lyrics %>% 
   group_by(artist, album, year, song) %>% 
   summarise(lyrics = paste0(line, collapse = " "))
+
 # tokenize
 sw_tokens = tokens(sw_lyrics_song$lyrics, what = "word1", 
                                remove_numbers = TRUE, remove_punct = TRUE,
@@ -433,9 +439,6 @@ sw_tokens = tokens_remove(sw_tokens, c(stopwords("english"),
                                        smart_stopwords, "you'r"))
 # remove two letter tokens
 sw_tokens = tokens_select(sw_tokens, min_nchar = 3)
-
-# Add bigrams and trigrams to our feature matrix
-sw_tokens = tokens_ngrams(sw_tokens, n = 1:3)
 
 # add meaningful doc names instead of text 1, text 2, ...
 doc_id = paste(1:nrow(sw_lyrics_song), sw_lyrics_song$song_id, sep = "_")
@@ -469,9 +472,6 @@ sy_tokens = tokens_remove(sy_tokens,
                                         smart_stopwords, "you'r"))
 # remove two letter tokens
 sy_tokens = tokens_select(sy_tokens, min_nchar = 3)
-
-# Add bigrams and trigrams to our feature matrix
-sy_tokens = tokens_ngrams(sy_tokens, n = 1:3)
 
 # add meaningful doc names instead of text 1, text 2, ...
 doc_id = paste(1:nrow(sy_lyrics_song), sy_lyrics_song$song_id, sep = "_")
@@ -516,7 +516,7 @@ frequent_words$artist = rep(c("Swans", "Sonic Youth"), each = 200)
 frequent_words %>%
   rename(word = feature) %>% 
   group_by(word) %>% 
-  filter(frequency > 30) %>% 
+  filter(frequency > 28) %>% 
     filter(n()>1) %>%
   group_by(artist) %>% 
   ggplot(aes(x = reorder(word, frequency), y = reorder(artist, desc(artist)))) +
@@ -528,15 +528,198 @@ frequent_words %>%
              position = position_nudge(y = 0.06)) +
   geom_text(aes(label=ifelse(frequency > 200,paste(as.character(frequency), " times"),"")),
             hjust=1.5,vjust=0, size = 3) +
-    geom_text(aes(label=ifelse(artist == "Swans" & word == "love",paste("on ", as.character(docfreq), " songs"),"")),
+    geom_text(aes(label=ifelse(artist == "Swans" & word == "mind",paste("on ", as.character(docfreq), " songs"),"")),
             hjust=-0.4,vjust=0, size = 3) +
     geom_text(aes(label=ifelse(docfreq > 60,paste("on ", as.character(docfreq), " songs"),"")),
-            hjust=-0.5,vjust=0, size = 3) +
+            hjust=-0.4,vjust=0, size = 3) +
+      geom_text(aes(label=ifelse(artist == "Sonic Youth" & word == "time",paste(as.character(frequency), " times"),"")),
+            hjust=1.5,vjust=0, size = 3) +
   coord_flip() +
   theme_ipsum() +
   labs(x = "Word",
        y = "Artist",
        title = "Most used words of both bands",
-       subtitle = "Sonic Youth")
+       subtitle = "Word frequency and number of songs the word occurs in",
+       size = "Frequency")
+
+```
+
+```{r type-token}
+# concatenate lines to lyrics per song (so that each song is a document)
+lyrics_song = lyrics %>% 
+  group_by(artist, album, year, song) %>% 
+  summarise(lyrics = paste0(line, collapse = " "))
+
+# Tokenize all lyrics
+tokens_lyrics = tokens(lyrics_song$lyrics, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Stem the tokens
+tokens_lyrics = tokens_wordstem(tokens_lyrics, language = "english")
+
+# Lowercase the tokens
+tokens_lyrics = tokens_tolower(tokens_lyrics)
+
+# Remove stopwords
+tokens_lyrics = tokens_remove(tokens_lyrics, 
+                                      c(stopwords("english"), 
+                                        smart_stopwords, "you'r"))
+# remove two letter tokens
+tokens_lyrics = tokens_select(tokens_lyrics, min_nchar = 3)
+
+# Add bigrams and trigrams to our feature matrix
+tokens_lyrics = tokens_ngrams(tokens_lyrics, n = 1:3)
+
+
+# get regulr type-toke-ratio
+# the closer to 1, the greater the lexical variety
+ttr = textstat_lexdiv(tokens_lyrics, measure = "TTR")
+ttr = cbind(ttr, lyrics_song)
+
+# plot
+ttr %>% 
+  group_by(artist, year, album) %>% 
+  summarise(mean_ttr = mean(TTR)) %>% 
+  ggplot(aes(x = year, y = mean_ttr)) +
+  geom_line(aes(color = reorder(artist, desc(artist))), alpha = .5) + 
+  geom_point(aes(x = year, y = mean_ttr), color = rep(c(sy_colors[3], sw_colors[3]), each = 15)) +
+  geom_smooth(method = "loess", span = 0.5, aes(color = artist), se = FALSE, size = 2) +
+  scale_color_manual(values=c(sw_colors[3], sy_colors[3])) +
+  geom_text(aes(label=ifelse(artist == "Swans" & mean_ttr < .33, as.character(album), "")),
+            hjust=-0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Swans" & mean_ttr > 0.86, as.character(album), "")),
+            hjust=0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Sonic Youth" & mean_ttr < 0.5, as.character(album), "")),
+            hjust=-0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Sonic Youth" & mean_ttr > 0.841, as.character(album), "")),
+            hjust=0,vjust=0, size = 3) +
+  theme_ipsum() +
+  labs(x = "Year",
+       y = "Mean Type-Token-Ratio per Album",
+       title = "How repetitive are the lyrics?",
+       subtitle = "Analysis of lexical variety of each album's lyrics",
+       color = "Artist")
+
+```
+
+```{r word-cooccurence}
+
+sy_coo = lyrics %>% 
+  filter(artist == "Sonic Youth") %>% 
+  ungroup() %>%  
+  unnest_tokens(word, line) %>%
+  distinct() %>%
+  filter(!word %in% smart_stopwords) %>%
+  anti_join(stop_words) %>%
+  filter(nchar(word) > 2)
+
+sy_word_corr = sy_coo %>% 
+  group_by(word) %>%
+  filter(n() >= 10) %>%
+  pairwise_cor(word, section, sort = TRUE)
+
+sy_coo_plot = sy_word_corr %>%
+  filter(correlation > .75) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "auto") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = sy_colors[3], size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+sw_coo = lyrics %>% 
+  filter(artist == "Swans") %>% 
+  ungroup() %>%  
+  unnest_tokens(word, line) %>%
+  distinct() %>%
+  filter(!word %in% smart_stopwords) %>%
+  anti_join(stop_words) %>%
+  filter(nchar(word) > 2)
+
+sw_word_corr = sw_coo %>% 
+  group_by(word) %>%
+  filter(n() >= 15) %>%
+  pairwise_cor(word, section, sort = TRUE)
+
+sw_coo_plot = sw_word_corr %>%
+  filter(correlation > .75) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "auto") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = sw_colors[3], size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+grid.arrange(sw_coo_plot, sy_coo_plot, ncol = 2)
+
+```
+
+```{r sentiment-analysis, message=FALSE, results="show", fig.dim=c(7,5)}
+# Tokenize all lyrics
+tokens_lyrics_line = tokens(lyrics$line, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Stem the tokens
+tokens_lyrics_line = tokens_wordstem(tokens_lyrics_line, language = "english")
+
+# Lowercase the tokens
+tokens_lyrics_line = tokens_tolower(tokens_lyrics_line)
+
+# Remove stopwords
+tokens_lyrics_line = tokens_remove(tokens_lyrics_line, 
+                                      c(stopwords("english"), 
+                                        smart_stopwords, "you'r"))
+# remove two letter tokens
+tokens_lyrics_line = tokens_select(tokens_lyrics_line, min_nchar = 3)
+
+# get only pos and neg values from dict
+data_dictionary_LSD2015_pos_neg = data_dictionary_LSD2015[1:2]
+
+# get sentiments
+tokens_lsd = tokens_lookup(tokens_lyrics_line, dictionary = data_dictionary_LSD2015_pos_neg)
+
+# convert to df
+dfm_lsd = dfm(tokens_lsd)
+lyrics_sentiment = convert(dfm_lsd, to = "data.frame")
+
+# get info back
+lyrics_sentiment = cbind(lyrics_sentiment, lyrics)
+
+# plot
+lyrics_sentiment %>% 
+  group_by(artist, year, album) %>% 
+  summarize(positive = mean(positive),
+            negative = mean(negative),
+            sentiment = positive-negative) %>% 
+  ggplot(aes(x = year, y = sentiment)) +
+  geom_line(aes(color = reorder(artist, desc(artist))), alpha = .5) + 
+  geom_point(aes(x = year, y = sentiment), color = rep(c(sy_colors[3], sw_colors[3]), each = 15)) +
+  geom_smooth(method = "loess", aes(color = artist), se = FALSE, size = 2) +
+  scale_color_manual(values=c(sw_colors[3], sy_colors[3])) +
+  geom_text(aes(label=ifelse(artist == "Swans" & sentiment < -0.5, as.character(album), "")),
+            hjust=-0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Swans" & sentiment > 0.22, as.character(album), "")),
+            hjust=0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Sonic Youth" & sentiment < -0.3, as.character(album), "")),
+            hjust=-0,vjust=0, size = 3) +
+  geom_text(aes(label=ifelse(artist == "Sonic Youth" & sentiment > 0.115, as.character(album), "")),
+            hjust=0,vjust=0, size = 3) +
+  theme_ipsum() +
+  labs(x = "Year",
+       y = "Sentiment",
+       title = "How negative are the lyrics?",
+       subtitle = "Sentiment analysis of each album's lyrics",
+       color = "Artist")
+
+```
+
+``` {r ml}
+
+
+
 
 ```
