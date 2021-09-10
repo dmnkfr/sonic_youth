@@ -32,7 +32,13 @@ library(gridExtra)
 library(widyr)
 library(ggraph)
 library(igraph)
-
+library(irlba)
+library(doParallel)
+library(lsa)
+library(randomForest)
+library(keras)
+library(ggforce)
+library(shiny)
 
 
 # Genius token: frBVSmYqTcAm9awzKE8HeNrsXFTSv_5cjdrFBTUh3oUnughftDiSBXf-V0UB5OZ2
@@ -58,7 +64,7 @@ sw_albums_year = data.frame(album = c("Filth", "Cop", "Greed", "Holy Money", "Ch
 sw_albums_by_year = sw_albums_year$album
 
 sy_albums_year = data.frame(album = c("Confusion Is Sex", "Bad Moon Rising", "EVOL",
-                    "Sister", "Daydream Nation", "Goo ", "Dirty",
+                    "Sister", "Daydream Nation", "Goo", "Dirty",
                     "Experimental Jet Set, Trash and No Star",
                     "Washing Machine", "A Thousand Leaves", 
                     "NYC Ghosts & Flowers", "Murray Street", "Sonic Nurse",
@@ -95,20 +101,33 @@ by Dominik Freunberger
 |      ***Making peace with every hole in the story?***
 |      (From the Sonic Youth song [*NYC Ghosts & Flowers*)](https://www.youtube.com/watch?v=bqnkMEnU0iI)
 
-
 <br/> <br/> 
 The NYC no wave/noise rock/post punk bands **Sonic Youth** and **Swans** are not
 only known for their eccentric and hypnotic noise landscapes but equally well for
 their intricate lyrics. While Sonic Youth's lyrics are deeply rooted in the tradition-less tradition of
 modern American poetry, listening to Swans often is reminiscent of going to a church full of noise when singer Michael Gira recites his ecclesiastical texts in their maelstrom of noise. What both bands share is their love for repetition and noise.
 
-Here I will take a deep dive into the words of each of the two bands' 15 studio
-records between 1983 and 2019.
+Here, I will take a deep dive into the words of each of the two bands' 15 studio
+records between 1983 and 2019 and provide different perspectives on some features of their lyrical craft. We'll see some (uncanny) commonalities and defining differences. Some of the questions I try to answer here include:
+
+- How many words do they use on each record and on each of their songs?
+- Which words do they use often and which words appear in many songs?
+- Which words occur together often?
+- How repetitive are the two bands? Has this changed over the years?
+- How negative are their lyrics? Has this changed over the years?
+- Can we teach a computer to differentiate between the two bands based on only a single line of lyrics?
+- Can a computer write lyrics in their style for us?
+
+So, let's get started.
+
+[![](images/swans.jpeg "Swans circa 1983 by Catherine Ceresole")](https://www.vice.com/sv/article/rjyng6/swans-filth-reissue-interview)
+
+<br/> <br/> 
 
 I'll get the lyrics from Genius' API. You need a genius account and
 create an API client on <https://genius.com/api-clients> for this.
 
-```{r get-lyrics, eval=FALSE, include=TRUE, message=FALSE}
+```{r get-lyrics, eval=FALSE, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
 # enter genius token when prompted:
 genius_token()
 
@@ -146,8 +165,53 @@ while (length(ids) > 0) {
 toc()
 
 # it get's only 244 of 265 songs listed on Genius; reason unknown. But okej.
+
+
+# # We're missing 7 songs from the record "To be kind" and 5 from "The glowing man"
+# # Let's try to get the manually
+# glowing_man = c("Cloud of Forgetting", "Cloud of Unknowing", 
+#   "The World Looks Red/The World Looks Black", "People Like Us",
+#   "Frankie M.", "When Will I Return? (Ft. Jennifer Gira)", "The Glowing Man",
+#   "Finally, Peace")
+# 
+# 
+# kind = c("Screen Shot", "Just a Little Boy (For Chester Burnett)", 
+#          "A Little God in My Hands", "Bring the Sun / Toussaint L’Ouverture",
+#          "Some Things We Do", "She Loves Us", "Kirsten Supine", "Oxygen", 
+#          "Nathalie Neal", "To Be Kind")
+# 
+# missing_ids = songs %>% 
+#   filter(song_name %in% glowing_man|
+#          song_name %in% kind |
+#          grepl("When Will I", song_name)) %>% 
+#   select(song_id, song_name)
+# 
+# # Create empty dataframe for the missing lyrics
+# missing_lyrics = data.frame()
+# 
+# # Add lyrics to df. This takes about 4 secs per song
+# for (id in missing_ids$song_id) {
+#    missing_lyrics = rbind(get_lyrics_id(id), missing_lyrics)
+#    print(id)
+#  }
+# 
+# while (length(missing_ids$song_id) > 0) {
+#   for (id in missing_ids$song_id) {
+#     tryCatch({
+#       missing_lyrics = rbind(get_lyrics_id(id), missing_lyrics)
+#       successful = unique(missing_lyrics$song_id)
+#       ids = ids[!ids %in% successful]
+#       print(id)
+#       print(paste("New length is ", length(ids)))
+#     }, error = function(e){})
+#   }
+# }
+# 
+# # add missing lyrics to existing lyrics
+# sw_lyrics = rbind(sw_lyrics, missing_lyrics)
+
 # add album info
-all_ids = data.frame(song_id = unique(sw_lyrics$song_id))
+all_ids = data.frame(song_id = unique(sw_lyricss$song_id))
 all_ids$album = ""
 
 for (song in all_ids$song_id) {
@@ -158,13 +222,14 @@ for (song in all_ids$song_id) {
 # join lyrics with album info
 sw_lyrics = full_join(all_ids, sw_lyrics)
 
+#### No idea what's going on, but for two records some songs seem to be lost along the way.
+
 # get only studio albums, get rid of unused cols and rename them
 sw_lyrics = sw_lyrics %>%
   filter(album %in% sw_albums_year$album) %>% 
   left_join(sw_albums_year) %>% 
   select(artist_name, album, year, song_name, song_id, section_name, line) %>% 
   rename(artist = artist_name, song = song_name, section = section_name)
-
 
 saveRDS(sw_lyrics, "./interim/swans_lyrics_tidy.RDS")
 
@@ -228,10 +293,13 @@ length(unique(sw_lyrics$song))
 length(unique(sy_lyrics$song))
 
 ```
+<br/> <br/> 
 
-**Fantastic!** We got 4602 lines of poetry from 149 Sonic Youth song and 4407 lines of prayers from 146 Swans songs. Let's see how many songs are on each of the records.
+So, we got 4602 lines of poetry from 149 Sonic Youth song and 4407 lines of prayers from 146 Swans songs. Let's see how many songs there are on each of the records.
 
-```{r combine-lyrics, eval=FALSE}
+<br/> <br/> 
+
+```{r combine-lyrics, eval=FALSE, include=FALSE}
 sy_lyrics = readRDS("./interim/sonic_youth_lyrics_tidy.RDS")
 sw_lyrics = readRDS("./interim/swans_lyrics_tidy.RDS")
 
@@ -243,30 +311,45 @@ lyrics = lyrics %>%
 saveRDS(lyrics, "./interim/lyrics_tidy.RDS")
 ````
 
-```{r print-tables, message=FALSE, results="show"}
+```{r songs-per-record, echo=FALSE, fig.dim = c(14,5), message=FALSE}
 lyrics = readRDS("./interim/lyrics_tidy.RDS")
 
-t1 = lyrics %>% 
+sw_nr_songs_plot = lyrics %>% 
   filter(artist == "Swans") %>% 
-  group_by(album) %>% 
+  group_by(album, year) %>% 
   summarize(nr_of_songs = n_distinct(song)) %>% 
-  arrange(desc(nr_of_songs))
+  ggplot(aes(x = reorder(album, -year), y = nr_of_songs)) + 
+  geom_col(fill = sw_colors[3])+
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = "Album by year",
+       y = " ",
+       title = "Songs per album",
+       subtitle = "Swans")
 
-t2 = lyrics %>% 
+sy_nr_songs_plot = lyrics %>% 
   filter(artist == "Sonic Youth") %>% 
-  group_by(album) %>% 
+  group_by(album, year) %>% 
   summarize(nr_of_songs = n_distinct(song)) %>% 
-  arrange(desc(nr_of_songs))
+  ggplot(aes(x = reorder(album, -year), y = nr_of_songs)) + 
+  geom_col(fill = sy_colors[3])+
+  coord_flip()+
+  theme_ipsum() +
+  labs(x = " ",
+       y = "Number of songs",
+       title = " ",
+       subtitle = "Sonic Youth")
 
-kable(list(t1, t2), caption = c("Swans", "Sonic Youth"))
+grid.arrange(sw_nr_songs_plot, sy_nr_songs_plot, ncol = 2)
+
 ```
 
-<br/> Let's explore the words in this noise
-rock landscape!
+<br/> <br/> 
+Arrrrghrghrgrhgr! For reasons still unknown, we got lyrics for only 3/10 songs from "To Be Kind" and only 3/8 from "The Glowing Man". But okej, we'll take what we got and start spiraling in.
 
 ### How many words do they use on each album?
 
-```{r plot-words-per-records, message=FALSE, warning=FALSE, results = "hide", fig.dim = c(14,5)}
+```{r plot-words-per-records, echo=FALSE, fig.dim = c(14,5), message=FALSE}
 lyrics = readRDS("./interim/lyrics_tidy.RDS")
 
 sw_nr_words_plot = lyrics %>% 
@@ -301,11 +384,11 @@ grid.arrange(sw_nr_words_plot, sy_nr_words_plot, ncol = 2)
 ```
 
 
-### How long are their lyrics per song?
+### How many words are there in each song?
 
 A quick and dirty count of unique words per song. We exclude all the la la la's and uh uh uh's.
 
-```{r plot-words-per-song, message=FALSE, results = "hide", fig.dim = c(13,5)}
+```{r plot-words-per-song, echo=FALSE, fig.dim = c(13,5), message=FALSE}
 sw_words_per_song = lyrics %>% 
   filter(artist == "Swans") %>% 
   group_by(year, album, song) %>% 
@@ -416,8 +499,8 @@ words, and, except for the chorus, quite the opposite of repetitiveness.
 their lyrics are, let's have a look at what words they actually use (a
 lot).
 
-```{r process-tokens, eval=FALSE, warning=FALSE}
-# concatenate lines to lyrics per song (so that each song is a document)
+```{r process-tokens, eval=FALSE, warning=FALSE, echo=FALSE}
+# concatenate lines to lyrics per song (so that each song is a document )
 sw_lyrics_song = sw_lyrics %>% 
   group_by(artist, album, year, song) %>% 
   summarise(lyrics = paste0(line, collapse = " "))
@@ -487,7 +570,7 @@ saveRDS(sy_word_freq, "./interim/sy_word_freq.RDS")
 saveRDS(sw_word_freq, "./interim/sw_word_freq.RDS")
 ```
 
-```{r wordclouds, results="hide", fig.dim=c(13,8)}
+```{r wordclouds, echo=FALSE, fig.dim=c(13,8), warning=FALSE}
 # word cloud with the n most frequent terms
 sy_word_freq = readRDS("./interim/sy_word_freq.RDS")
 sw_word_freq = readRDS("./interim/sw_word_freq.RDS")
@@ -505,7 +588,7 @@ wordcloud(words = sy_word_freq$feature,
           color = sy_colors)
 ```
 
-```{r frequent_words, message=FALSE, results="show", fig.dim=c(7,5)}
+```{r frequent_words, message=FALSE, fig.dim=c(7,5), echo=FALSE, warning=FALSE}
 # frequent words
 sw_frequent_words = as.data.frame(sw_word_freq)
 sy_frequent_words = as.data.frame(sy_word_freq)
@@ -544,7 +627,7 @@ frequent_words %>%
 
 ```
 
-```{r type-token}
+```{r type-token, echo=FALSE, message=FALSE, warning=FALSE}
 # concatenate lines to lyrics per song (so that each song is a document)
 lyrics_song = lyrics %>% 
   group_by(artist, album, year, song) %>% 
@@ -596,6 +679,7 @@ ttr %>%
   geom_text(aes(label=ifelse(artist == "Sonic Youth" & mean_ttr > 0.841, as.character(album), "")),
             hjust=0,vjust=0, size = 3) +
   theme_ipsum() +
+  scale_y_reverse()+
   labs(x = "Year",
        y = "Mean Type-Token-Ratio per Album",
        title = "How repetitive are the lyrics?",
@@ -604,7 +688,7 @@ ttr %>%
 
 ```
 
-```{r word-cooccurence}
+```{r word-cooccurence, echo=FALSE, warning=FALSE, message=FALSE}
 
 sy_coo = lyrics %>% 
   filter(artist == "Sonic Youth") %>% 
@@ -621,9 +705,9 @@ sy_word_corr = sy_coo %>%
   pairwise_cor(word, section, sort = TRUE)
 
 sy_coo_plot = sy_word_corr %>%
-  filter(correlation > .75) %>%
+  filter(correlation > .70) %>%
   graph_from_data_frame() %>%
-  ggraph(layout = "auto") +
+  ggraph(layout = "kk") +
   geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
   geom_node_point(color = sy_colors[3], size = 5) +
   geom_node_text(aes(label = name), repel = TRUE) +
@@ -646,7 +730,7 @@ sw_word_corr = sw_coo %>%
 sw_coo_plot = sw_word_corr %>%
   filter(correlation > .75) %>%
   graph_from_data_frame() %>%
-  ggraph(layout = "auto") +
+  ggraph(layout = "kk") +
   geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
   geom_node_point(color = sw_colors[3], size = 5) +
   geom_node_text(aes(label = name), repel = TRUE) +
@@ -656,7 +740,7 @@ grid.arrange(sw_coo_plot, sy_coo_plot, ncol = 2)
 
 ```
 
-```{r sentiment-analysis, message=FALSE, results="show", fig.dim=c(7,5)}
+```{r sentiment-analysis, message=FALSE, echo=FALSE, fig.dim=c(7,5), warning=FALSE}
 # Tokenize all lyrics
 tokens_lyrics_line = tokens(lyrics$line, what = "word1", 
                                remove_numbers = TRUE, remove_punct = TRUE,
@@ -710,16 +794,850 @@ lyrics_sentiment %>%
             hjust=0,vjust=0, size = 3) +
   theme_ipsum() +
   labs(x = "Year",
-       y = "Sentiment",
+       y = "Mean Sentiment per Album",
        title = "How negative are the lyrics?",
        subtitle = "Sentiment analysis of each album's lyrics",
        color = "Artist")
 
 ```
 
-``` {r ml}
+``` {r ml-classification, eval=FALSE}
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist)
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+# preprocess training text data
+# tokenize
+train_tokens = tokens(train$line, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Stem the tokens
+train_tokens = tokens_wordstem(train_tokens, language = "english")
+
+# Lowercase the tokens
+train_tokens = tokens_tolower(train_tokens)
+
+# Remove stopwords
+train_tokens = tokens_remove(train_tokens, c(stopwords("english"),
+                                       smart_stopwords, "you'r"))
+# remove two letter tokens
+train_tokens = tokens_select(train_tokens, min_nchar = 3)
+
+# add bigrams 
+train_tokens = tokens_ngrams(train_tokens, n = 1:3)
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+train_dfm = dfm(train_tokens, tolower = FALSE)
+
+# Transform to a matrix and inspect.
+train_tokens_matrix = as.matrix(train_dfm)
+#View(train_tokens_matrix[1:20, 1:100])
+dim(train_tokens_matrix)
+
+# Setup a the feature data frame with labels.
+train_tokens_df = cbind(label = train$artist, data.frame(train_dfm))
+
+# Cleanup column names.
+names(train_tokens_df) = make.names(names(train_tokens_df))
+
+# Use caret to create stratified folds for 10-fold cross validation repeated 
+# 3 times (i.e., create 30 random stratified samples)
+set.seed(42)
+cv_folds = createMultiFolds(train$artist, k = 10, times = 3)
+
+cv_cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv_folds)
+
+
+# Time the code execution
+start.time <- Sys.time()
+
+# train the model
+rpart_cv1 <- train(label ~ ., data = train_tokens_df, method = "rpart", 
+                    trControl = cv_cntrl, tuneLength = 7)
+
+# Total time of execution on workstation was approximately 41 minutes. 
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results.
+rpart_cv1
+
+# .6012 accuracy is not too bad for a first attempt
+
+#########################################
+# Let's turn the dfm into a tf-idf-matrix
+
+train_tokens_tfidf = dfm_tfidf(train_dfm)
+
+# Make a clean data frame.
+train_tokens_tfidf_df <- cbind(label = train$artist, data.frame(train_tokens_tfidf))
+names(train_tokens_tfidf_df) <- make.names(names(train_tokens_tfidf_df))
+
+
+# Time the code execution
+start.time <- Sys.time()
+
+# train the model
+rpart_cv2 <- train(label ~ ., data = train_tokens_tfidf_df, method = "rpart", 
+                    trControl = cv_cntrl, tuneLength = 7)
+
+
+# Total time of execution on workstation was 42 minutes
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results.
+rpart_cv2
+
+# .6012 accuracy is not too bad for a second attempt
+
+#########################################
+# Let's do some SVD
+# Time the code execution
+start.time <- Sys.time()
+
+# Perform SVD. Specifically, reduce dimensionality down to 300 columns
+# for our latent semantic analysis (LSA).
+train_irlba <- irlba(t(train_tokens_tfidf), nv = 300, maxit = 600)
+
+# Total time of execution on workstation was 17 minutes
+total.time <- Sys.time() - start.time
+total.time
+
+
+# Create new feature data frame using our document semantic space of 300
+# features (i.e., the V matrix from our SVD).
+
+train_svd = data.frame(label = train$artist, train_irlba$v)
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+# This will be the last run using single decision trees. With a much smaller
+# feature matrix we can now use more powerful methods like the mighty Random
+# Forest from now on!
+rpart_cv4 <- train(label ~ ., data = train_svd, method = "rpart", 
+                    trControl = cv_cntrl, tuneLength = 7)
+
+# Total time of execution on workstation was 1 minute
+total.time <- Sys.time() - start.time
+total.time
+
+## When you are done:
+stopCluster(cl)
+
+# Check out our results.
+rpart_cv4
+
+# .6381 accuracy. Getting better.
+
+#########################################
+# Let's train a random forest
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+# We have reduced the dimensionality of our data using SVD. Also, the 
+# application of SVD allows us to use LSA to simultaneously increase the
+# information density of each feature. To prove this out, leverage a 
+# mighty Random Forest with the default of 500 trees. We'll also ask
+# caret to try 7 different values of mtry to find the mtry value that 
+# gives the best result!
+
+rf_cv1 <- train(label ~ ., data = train_svd, method = "rf", 
+                 trControl = cv_cntrl, tuneLength = 7)
+
+## When you are done:
+stopCluster(cl)
+# Total time of execution on workstation was 4.4 hours
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results. .7672 Getting there.
+rf_cv1
+saveRDS(rf_cv1, "./interim/random_forest_model1.RDS")
+
+# Let's drill-down on the results.
+train_svd$label = as.factor(train_svd$label)
+confusionMatrix(train_svd$label, rf_cv1$finalModel$predicted)
+
+###################
+# Let's engineer some features. We can add sentiment and TTR as features
+
+# add TTR
+train_ttr = textstat_lexdiv(train_tokens, measure = "TTR")
+train_svd = cbind(train_svd, train_ttr$TTR)
+
+# get only pos and neg values from dict
+data_dictionary_LSD2015_pos_neg = data_dictionary_LSD2015[1:2]
+
+# add sentiments
+train_lsd = tokens_lookup(train_tokens, dictionary = data_dictionary_LSD2015_pos_neg)
+train_dfm_lsd = dfm(train_lsd)
+train_sentiment = convert(train_dfm_lsd, to = "data.frame")
+
+train_svd = cbind(train_svd, train_sentiment[,2:3])
+train_svd$TTR = train_svd$`train_ttr$TTR`
+train_svd$`train_ttr$TTR` = NULL
+
+# since we have missing values in the TTR, we'll have to impute them
+# 80% of TTR values are equal to 1, so we'll replace the 496 missing values with 1
+train_svd$TTR[is.na(train_svd$TTR)] = 1  # Replace NA in one column
+summary(train_svd$TTR)
+
+
+## Run another random forest on the new data
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+# We have reduced the dimensionality of our data using SVD. Also, the 
+# application of SVD allows us to use LSA to simultaneously increase the
+# information density of each feature. To prove this out, leverage a 
+# mighty Random Forest with the default of 500 trees. We'll also ask
+# caret to try 7 different values of mtry to find the mtry value that 
+# gives the best result!
+
+rf_cv2 <- train(label ~ ., data = train_svd, method = "rf", 
+                 trControl = cv_cntrl, tuneLength = 7)
+
+## When you are done:
+stopCluster(cl)
+# Total time of execution on workstation was 4.8 hours
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results. .7613. So the new features made the performance worse.
+rf_cv2
+saveRDS(rf_cv2, "./interim/random_forest_model2.RDS")
+
+# Let's drill-down on the results.
+train_svd$label = as.factor(train_svd$label)
+confusionMatrix(train_svd$label, rf_cv2$finalModel$predicted)
+
+# Let's look at feature importance
+varImpPlot(rf_cv2$finalModel)
+
+# TTR actually was a good predictor. Let's keep that and delete sentiment
+train_svd = train_svd[,-(302:303)]
+
+#################################
+# Let's try an xgboost mode with the same data
+
+# Leverage a grid search of hyperparameters for xgboost. See 
+# the following presentation for more information:
+# https://www.slideshare.net/odsc/owen-zhangopen-sourcetoolsanddscompetitions1
+tune_grid <- expand.grid(eta = c(0.05, 0.075, 0.1),
+                         nrounds = c(50, 75, 100),
+                         max_depth = 6:8,
+                         min_child_weight = c(2.0, 2.25, 2.5),
+                         colsample_bytree = c(0.3, 0.4, 0.5),
+                         gamma = 0,
+                         subsample = 1)
+View(tune_grid)
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Train the xgboost model using 10-fold CV repeated 3 times 
+# and a hyperparameter grid search to train the optimal model.
+
+xgb_cv1 <- train(label ~ ., 
+                  data = train_svd,
+                  method = "xgbTree",
+                  tuneGrid = tune_grid,
+                  trControl = cv_cntrl)
+## When you are done:
+stopCluster(cl)
+
+saveRDS(xgb_cv1, "./interim/xgb_model1.RDS")
+
+# Examine caret's processing results
+xgb_cv1
+
+results_df = xgb_cv1$results
+
+results_df %>% 
+  arrange(desc(Accuracy)) %>% 
+  top_n(10)
+```
+
+```{r ml-classification-2, eval=FALSE}
+# Accuracy dropped to .7621. Random Forest performed better.
+# However, let's see if we can change the data so we get above .8
+# First, we delete duplicate rows
+# Second, we keep stop words
+# Third, we don't stem
+
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist) %>% 
+  distinct()
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+# preprocess training text data
+# tokenize
+train_tokens = tokens(train$line, what = "word1", 
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Lowercase the tokens
+train_tokens = tokens_tolower(train_tokens)
+
+# remove two letter tokens
+train_tokens = tokens_select(train_tokens, min_nchar = 3)
+
+# add bigrams and trigrams
+train_tokens = tokens_ngrams(train_tokens, n = 1:3)
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+train_dfm = dfm(train_tokens, tolower = FALSE)
+
+# Transform to a matrix and inspect.
+train_tokens_matrix = as.matrix(train_dfm)
+
+#View(train_tokens_matrix[1:20, 1:100])
+dim(train_tokens_matrix)
+
+# Setup a the feature data frame with labels.
+train_tokens_df = cbind(label = train$artist, data.frame(train_dfm))
+
+# Cleanup column names.
+names(train_tokens_df) = make.names(names(train_tokens_df))
+
+# Let's turn the dfm into a tf-idf-matrix
+train_tokens_tfidf = dfm_tfidf(train_dfm)
+
+# Make a clean data frame.
+train_tokens_tfidf_df <- cbind(label = train$artist, data.frame(train_tokens_tfidf))
+names(train_tokens_tfidf_df) <- make.names(names(train_tokens_tfidf_df))
+
+# Let's do some SVD
+# Time the code execution
+start.time <- Sys.time()
+
+# Perform SVD. Specifically, reduce dimensionality down to 300 columns
+# for our latent semantic analysis (LSA).
+train_irlba <- irlba(t(train_tokens_tfidf), nv = 300, maxit = 600)
+
+# Total time of execution on workstation was 12 minutes
+total.time <- Sys.time() - start.time
+total.time
+
+
+# Create new feature data frame using our document semantic space of 300
+# features (i.e., the V matrix from our SVD).
+
+train_svd = data.frame(label = train$artist, train_irlba$v)
+
+## Run another random forest on the new data
+
+# Use caret to create stratified folds for 10-fold cross validation repeated 
+# 3 times (i.e., create 30 random stratified samples)
+set.seed(42)
+cv_folds = createMultiFolds(train$artist, k = 10, times = 3)
+
+cv_cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv_folds)
 
 
 
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+rf_cv3 <- train(label ~ ., data = train_svd, method = "rf", 
+                 trControl = cv_cntrl, tuneLength = 7)
+
+## When you are done:
+stopCluster(cl)
+# Total time of execution on workstation was 1.7 hours
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results. .7613. So the new features made the performance worse.
+rf_cv3
+saveRDS(rf_cv3, "./interim/random_forest_model3.RDS")
+
+# Let's drill-down on the results.
+train_svd$label = as.factor(train_svd$label)
+confusionMatrix(train_svd$label, rf_cv3$finalModel$predicted)
+
+# Let's look at feature importance
+varImpPlot(rf_cv3$finalModel)
 
 ```
+
+```{r ml-classification-3, eval=FALSE}
+# Accuracy dropped to .7337. Let's try shingles
+
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist)
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+train_dfm <- train$line %>%
+  tokens(what = "character") %>%
+  tokens_keep("[A-Za-z]", valuetype = "regex") %>%
+  tokens_ngrams(n = 2, concatenator = "") %>%
+  dfm()
+
+# Transform to a matrix and inspect.
+train_tokens_matrix = as.matrix(train_dfm)
+
+#View(train_tokens_matrix[1:20, 1:100])
+dim(train_tokens_matrix)
+
+# Setup a the feature data frame with labels.
+train_tokens_df = cbind(label = train$artist, data.frame(train_dfm))
+
+# Cleanup column names.
+names(train_tokens_df) = make.names(names(train_tokens_df))
+
+# Let's turn the dfm into a tf-idf-matrix
+train_tokens_tfidf = dfm_tfidf(train_dfm)
+
+# Make a clean data frame.
+train_tokens_tfidf_df <- cbind(label = train$artist, data.frame(train_tokens_tfidf))
+names(train_tokens_tfidf_df) <- make.names(names(train_tokens_tfidf_df))
+
+# Let's do some SVD
+# Time the code execution
+start.time <- Sys.time()
+
+# Perform SVD. Specifically, reduce dimensionality down to 300 columns
+# for our latent semantic analysis (LSA).
+train_irlba <- irlba(t(train_tokens_tfidf), nv = 300, maxit = 600)
+
+# Total time of execution on workstation was 1 minute
+total.time <- Sys.time() - start.time
+total.time
+
+
+# Create new feature data frame using our document semantic space of 300
+# features (i.e., the V matrix from our SVD).
+
+train_svd = data.frame(label = train$artist, train_irlba$v)
+
+## Run another random forest on the new data
+
+# Use caret to create stratified folds for 10-fold cross validation repeated 
+# 3 times (i.e., create 30 random stratified samples)
+set.seed(42)
+cv_folds = createMultiFolds(train$artist, k = 10, times = 3)
+
+cv_cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv_folds)
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+rf_cv4 <- train(label ~ ., data = train_svd, method = "rf", 
+                 trControl = cv_cntrl, tuneLength = 7)
+
+## When you are done:
+stopCluster(cl)
+# Total time of execution on workstation was 4.2 hours
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results. .7945. What an improvement! Shingles all the way.
+rf_cv4
+saveRDS(rf_cv4, "./interim/random_forest_model4.RDS")
+
+# Let's drill-down on the results.
+train_svd$label = as.factor(train_svd$label)
+confusionMatrix(train_svd$label, rf_cv4$finalModel$predicted)
+
+# Let's look at feature importance
+varImpPlot(rf_cv4$finalModel)
+
+```
+
+```{r ml-classification-5, eval=FALSE}
+### Now let's try to padding so thta words that do not appear next to each other
+### stay away from each other
+# No stemming
+# No stopword removal
+
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist)
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+# preprocess training text data
+# tokenize
+train_tokens = tokens(train$line, what = "word1", padding = TRUE,
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Lowercase the tokens
+train_tokens = tokens_tolower(train_tokens)
+
+# add bigrams and trigrams
+train_tokens = tokens_ngrams(train_tokens, n = 1:3)
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+train_dfm = dfm(train_tokens, tolower = FALSE)
+
+# Transform to a matrix and inspect.
+train_tokens_matrix = as.matrix(train_dfm)
+
+#View(train_tokens_matrix[1:20, 1:100])
+dim(train_tokens_matrix)
+
+# Setup a the feature data frame with labels.
+train_tokens_df = cbind(label = train$artist, data.frame(train_dfm))
+
+# Cleanup column names.
+names(train_tokens_df) = make.names(names(train_tokens_df))
+
+# Let's turn the dfm into a tf-idf-matrix
+train_tokens_tfidf = dfm_tfidf(train_dfm)
+
+# Make a clean data frame.
+train_tokens_tfidf_df <- cbind(label = train$artist, data.frame(train_tokens_tfidf))
+names(train_tokens_tfidf_df) <- make.names(names(train_tokens_tfidf_df))
+
+# Let's do some SVD
+# Time the code execution
+start.time <- Sys.time()
+
+# Perform SVD. Specifically, reduce dimensionality down to 300 columns
+# for our latent semantic analysis (LSA).
+train_irlba <- irlba(t(train_tokens_tfidf), nv = 300, maxit = 600)
+
+# Total time of execution on workstation was 11 minutes
+total.time <- Sys.time() - start.time
+total.time
+
+
+# Create new feature data frame using our document semantic space of 300
+# features (i.e., the V matrix from our SVD).
+
+train_svd = data.frame(label = train$artist, train_irlba$v)
+
+## Run another random forest on the new data
+
+# Use caret to create stratified folds for 10-fold cross validation repeated 
+# 3 times (i.e., create 30 random stratified samples)
+set.seed(42)
+cv_folds = createMultiFolds(train$artist, k = 10, times = 3)
+
+cv_cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv_folds)
+
+# start parallel processing
+cl = makePSOCKcluster(7)
+registerDoParallel(cl)
+
+# Time the code execution
+start.time <- Sys.time()
+
+rf_cv5 <- train(label ~ ., data = train_svd, method = "rf", 
+                 trControl = cv_cntrl, tuneLength = 7)
+
+## When you are done:
+stopCluster(cl)
+# Total time of execution was 2.9 hours  
+total.time <- Sys.time() - start.time
+total.time
+
+# Check out our results. .8259 wow, padded tf-idf into SVD!
+rf_cv5
+saveRDS(rf_cv5, "./interim/random_forest_model5.RDS")
+
+# Let's drill-down on the results.
+train_svd$label = as.factor(train_svd$label)
+confusionMatrix(train_svd$label, rf_cv5$finalModel$predicted)
+
+# Let's look at feature importance
+varImpPlot(rf_cv5$finalModel)
+
+```
+
+
+
+```{r ml-classification-test, eval=FALSE}
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist)
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+# preprocess testing text data
+# tokenize
+test_tokens = tokens(test$line, what = "word1", padding = TRUE,
+                               remove_numbers = TRUE, remove_punct = TRUE,
+                               remove_symbols = TRUE, remove_hyphens = TRUE,
+                               remove_twitter = TRUE)
+
+# Lowercase the tokens
+test_tokens = tokens_tolower(test_tokens)
+
+# add bigrams and trigrams
+test_tokens = tokens_ngrams(test_tokens, n = 1:3)
+
+test_tokens <- tokens_select(test_tokens, pattern = train_dfm@Dimnames$features,
+                              selection = "keep")
+
+# Create bag-of-words model (document frequency matrix/ dfm)
+test_dfm = dfm(test_tokens, tolower = FALSE)
+
+# Transform to a matrix and inspect.
+test_tokens_matrix = as.matrix(test_dfm)
+
+#View(test_tokens_matrix[1:20, 1:100])
+dim(test_tokens_matrix)
+
+# Setup a the feature data frame with labels.
+test_tokens_df = cbind(label = test$artist, data.frame(test_dfm))
+
+# Cleanup column names.
+names(test_tokens_df) = make.names(names(test_tokens_df))
+
+# Let's turn the dfm into a tf-idf-matrix
+test_tokens_tfidf = dfm_tfidf(test_dfm)
+
+# Make a clean data frame.
+test_tokens_tfidf_df <- cbind(label = test$artist, data.frame(test_tokens_tfidf))
+names(test_tokens_tfidf_df) <- make.names(names(test_tokens_tfidf_df))
+
+# Let's do some SVD
+# Time the code execution
+start.time <- Sys.time()
+
+# Perform SVD. Specifically, reduce dimensionality down to 300 columns
+# for our latent semantic analysis (LSA).
+test_irlba <- irlba(t(test_tokens_tfidf), nv = 300, maxit = 600)
+
+# Total time of execution on workstation was 11 minutes
+total.time <- Sys.time() - start.time
+total.time
+
+# Lastly, we can now build the test data frame to feed into our trained
+# machine learning model for predictions. First up, add Label and TextLength.
+test_svd <- data.frame(label = test$artist, test_svd_raw)
+
+
+# Now we can make predictions on the test data set using our trained mighty 
+# random forest.
+preds = predict(rf_cv5, test_svd)
+
+# Drill-in on results
+test_svd$label = as.factor(test_svd$label)
+confusionMatrix(preds, test_svd$label)
+
+### This is very bad. I don't know (yet) what's going on here and why only SY is predicted all the time.
+# It's either a super overfitted model or the projection in the tf idf and svd space doesn't work.
+
+# Anyway, let's move on to some Tensor Flow
+
+```
+
+
+```{r ml-classification-6, eval=FALSE}
+# Let's try some tensor flow models
+
+# get only text and label (=artist)
+lyrics = readRDS("./interim/lyrics_tidy.RDS")
+
+ml_lyrics = lyrics %>% 
+  select(line, artist, song) %>% 
+  group_by(artist, song) %>% 
+  # paste all the lines per album
+  summarize(lyrics = paste0(line, collapse = " ")) %>% 
+  select(artist, lyrics)
+
+# Use caret to create a 70%/30% stratified split. Set the random
+# seed for reproducibility
+set.seed(42)
+indexes = createDataPartition(ml_lyrics$artist, times = 1,
+                               p = 0.7, list = FALSE)
+
+train = ml_lyrics[indexes,]
+test = ml_lyrics[-indexes,]
+
+# Verify proportions
+prop.table(table(train$artist))
+prop.table(table(test$artist))
+
+# https://tensorflow.rstudio.com/tutorials/beginners/basic-ml/tutorial_basic_text_classification/
+
+num_words = 10000
+max_length = 50
+text_vectorization = layer_text_vectorization(
+  max_tokens = num_words, 
+  output_sequence_length = max_length,
+)
+
+text_vectorization %>% 
+  adapt(ml_lyrics$lyrics)
+
+# TODO see https://github.com/tensorflow/tensorflow/pull/34529
+get_vocabulary(text_vectorization)
+
+text_vectorization(matrix(ml_lyrics$lyrics[1], ncol = 1))
+
+# build the model
+input <- layer_input(shape = c(1), dtype = "string")
+
+output <- input %>% 
+  text_vectorization() %>% 
+  layer_embedding(input_dim = num_words + 1, output_dim = 16) %>%
+  layer_global_average_pooling_1d() %>%
+  layer_dense(units = 128, activation = "relu") %>%
+  layer_dropout(0.5) %>% 
+  layer_dense(units = 1, activation = "sigmoid")
+
+model <- keras_model(input, output)
+
+# Now, configure the model to use an optimizer and a loss function:
+model %>% compile(
+  optimizer = 'rmsprop',
+  loss = 'binary_crossentropy',
+  metrics = list('accuracy')
+)
+
+history = model %>% fit(
+  train$lyrics,
+  as.numeric(train$artist == "Sonic Youth"),
+  epochs = 500,
+  batch_size = 512,
+  validation_split = 0.2,
+  verbose=2
+)
+
+results <- model %>% evaluate(test$lyrics, as.numeric(test$artist == "Sonic Youth"), verbose = 0)
+results
+# .8002 accuracy on the test set. This is decent and will do!
+plot(history)
+
+# save model
+model %>% save_model_tf("model")
+
+```
+
+```{r build-lyrics-classifier, dim=c(5,3)}
+# load model
+model <- load_model_tf("model")
+# define input
+input = "goo"
+
+# make prediction
+pred = model %>% predict(input)
+predictions = data.frame(prediction = "prediction",
+                         pred = c(0, pred-0.5))
+
+color = ifelse(predictions$pred > 0, sy_colors[3], sw_colors[3])
+
+ggplot(predictions, aes(x=prediction,y=pred[2]))+
+  geom_point(size = abs(predictions$pred)*80, color = color)+
+  ylim(-1,1)+
+    geom_vline(xintercept = 1, color = "grey", alpha = .2)+
+    geom_hline(yintercept = 0, color = "grey", alpha = .2)+
+
+    coord_flip()+
+  annotate("text", x = 1, y = -0.5, label = "SWANS",
+           colour=sw_colors[2], size=7, family="Courier", fontface="bold")+
+  annotate("text", x = 1, y = 0.5, label = "SONIC YOUTH",
+           colour=sy_colors[2], size=7, family="Courier", fontface="bold")+
+  theme_void()
+
+```
+
