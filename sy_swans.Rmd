@@ -5,6 +5,7 @@ output:
   hrbrthemes::ipsum:
     code_folding: hide
     toc: true
+  md_document: default
 editor_options:
   chunk_output_type: inline
   markdown:
@@ -577,7 +578,7 @@ saveRDS(sy_word_freq, "./interim/sy_word_freq.RDS")
 saveRDS(sw_word_freq, "./interim/sw_word_freq.RDS")
 ```
 
-Here is a __word cloud__ of the words they use most often. Note that some words look a bit strange ( _littl?!_ _someth??!_). That's because the words were [_stemmed_.](https://en.wikipedia.org/wiki/Stemming)
+Here are two __word clouds__ of the words they use most often. Swans on the left, Sonic Youth on the right. Note that some words look a bit strange ( _littl?!_ _someth??!_). That's because the words were [_stemmed_.](https://en.wikipedia.org/wiki/Stemming)
 
 ```{r wordclouds, echo=FALSE, fig.dim=c(13,8), warning=FALSE}
 # word cloud with the n most frequent terms
@@ -658,7 +659,7 @@ frequent_words %>%
 <br/>
 
 ### Mantras of noise: How repetitive are their lyrics?
-
+So, THE. BIG. QUESTION. IS: 
 ```{r type-token, echo=FALSE, message=FALSE, warning=FALSE, fig.dim = c(9,5)}
 # concatenate lines to lyrics per song (so that each song is a document)
 lyrics_song = lyrics %>% 
@@ -850,7 +851,7 @@ ml_lyrics = all_lyrics %>%
 # seed for reproducibility
 set.seed(42)
 indexes = createDataPartition(ml_lyrics$artist, times = 1,
-                               p = 0.7, list = FALSE)
+                               p = 0.8, list = FALSE)
 
 train = ml_lyrics[indexes,]
 test = ml_lyrics[-indexes,]
@@ -869,12 +870,12 @@ text_vectorization = layer_text_vectorization(
 )
 
 text_vectorization %>% 
-  adapt(ml_lyrics$line)
+  adapt(ml_lyrics$lyrics)
 
 # TODO see https://github.com/tensorflow/tensorflow/pull/34529
 get_vocabulary(text_vectorization)
 
-text_vectorization(matrix(ml_lyrics$line[1], ncol = 1))
+text_vectorization(matrix(ml_lyrics$lyrics[1], ncol = 1))
 
 # build the model
 input <- layer_input(shape = c(1), dtype = "string")
@@ -897,17 +898,17 @@ model %>% compile(
 )
 
 history = model %>% fit(
-  train$line,
+  train$lyrics,
   as.numeric(train$artist == "Sonic Youth"),
-  epochs = 500,
-  batch_size = 512,
+  epochs = 47,
+  batch_size = 128,
   validation_split = 0.2,
   verbose=2
 )
 
-results <- model %>% evaluate(test$line, as.numeric(test$artist == "Sonic Youth"), verbose = 0)
+results <- model %>% evaluate(test$lyrics, as.numeric(test$artist == "Sonic Youth"), verbose = 0)
 results
-# .8020 accuracy on the test set. This is decent and will do!
+# .79 accuracy on the test set. This is decent and will do!
 plot(history)
 
 # save model
@@ -917,12 +918,12 @@ model %>% save_model_tf("model")
 
 ```{r build-lyrics-classifier, fig.dim = c(7,4), echo=FALSE}
 # load model
-model <- load_model_tf("model")
+model_class <- load_model_tf("model")
 # define input
-input = "breakfast is great"
+input = "daydreaming days in heaven"
 
 # make prediction
-pred = model %>% predict(input)
+pred = model_class %>% predict(input)
 predictions = data.frame(prediction = "prediction",
                          pred = c(0, pred-0.5))
 
@@ -954,103 +955,3 @@ ggplot(predictions, aes(x=prediction,y=pred[2]))+
 
 [![](images/example_gif.gif "Lyrics Classification Example")](https://dmnkfr.shinyapps.io/Swans_Sonic_Youth/)
 <br/><br/>
-
-```{python build-lyrics-generator}
-# Following this tutorial
-# https://levelup.gitconnected.com/lyrics-generation-using-lstm-5a5a0bcac4fa
-# get libraries
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-from keras.layers import Embedding, Bidirectional, Dropout, Dense, LSTM
-from keras.models import Sequential
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-tf.__version__
-
-# load data
-data = open('./interim/only_lyrics.txt').read()
-# lowercase and split
-corpus = data.lower().split("\n")
-corpus = [x for x in corpus if not isinstance(x, int)]
-
-# To make sure no sentence appears twice in our corpus, we use set. Otherwise, it will make the model biased.
-corpus = list(set(corpus))
-
-# tokenize it with Keras' Tokenizer
-tokenizer = Tokenizer()
-tokenizer.fit_on_texts(corpus)
-total_words = len(tokenizer.word_index) + 1
-
-# create input sequences using list of tokens
-input_sequences = []
-for line in corpus:
-    token_list = tokenizer.texts_to_sequences([line])[0]
-    
-    for i in range(1, len(token_list)):
-        n_gram_sequence = token_list[:i+1]
-    
-    input_sequences.append(n_gram_sequence)
-
-# Pad Sequences: In our corpus, every sentence has a different length. So the input sequence will also have different lengths. Such an input cannot be fed to the model because it is unbalanced. Hence, we perform padding.
-
-# pad sequences
-max_sequence_len = max([len(x) for x in input_sequences])
-input_sequences = np.array(pad_sequences(input_sequences,
-                       maxlen = max_sequence_len, padding='pre'))
-
-
-# Predictors and Labels: The problem we are solving here is a supervised learning problem. So we will have to provide the model with some labels so that it can generalise the relation between the words used to predict and the predicted word.
-# So, we will use our input sequence and use the last word of all sequences as labels for all previous words.
-
-predictors, label = input_sequences[:,:-1],input_sequences[:,-1]
-
-
-# Building the Model
-# Honestly, the complex part is done. Now we just have to build a RNN model using LSTM. Read more about LSTM here.
-model = Sequential()
-model.add(Embedding(total_words, 50, input_length=max_sequence_len-1))
-# Add an LSTM Layer
-model.add(Bidirectional(LSTM(150, return_sequences=True)))  
-# A dropout layer for regularisation
-model.add(Dropout(0.2))
-# Add another LSTM Layer
-model.add(LSTM(100)) 
-model.add(Dense(total_words/2, activation='relu'))  
-# In the last layer, the shape should be equal to the total number of words present in our corpus
-model.add(Dense(total_words, activation='softmax'))
-# change loss to "sparse_categorical_crossentropy"
-model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics='accuracy')  #(# Pick a loss function and an optimizer)
-print(model.summary())
-
-# Now, we will fit the model on predictors and labels. You can vary the epochs to see the variation in accuracy and where the model overfits the data.
-history = model.fit(predictors, label, epochs= 100, verbose=1)
-
-
-# Generating Lyrics
-# We will generate lyrics now, using the model we built.
-def make_lyrics(seed_text, next_words):
-    for _ in range(next_words):
-        token_list = tokenizer.texts_to_sequences([seed_text])[0]
-        token_list = pad_sequences([token_list],
-                     maxlen=max_sequence_len-1,padding='pre')
-        predict = model.predict(token_list)
-        predicted_word = np.argmax(predict,axis=1)
-        output_word = ""
-        for word, index in tokenizer.word_index.items():
-            if index == predicted_word:
-                output_word = word
-                break
-        seed_text += " " + output_word
-    print(seed_text)
-    
-model.save("./lyrics_generator")
-
-make_lyrics("The love", 7)
-
-
-# TODO: Translate this function to R!
-```
