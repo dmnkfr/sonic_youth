@@ -329,6 +329,10 @@ lyrics_studio_tokens = tokens_remove(lyrics_studio_tokens,
 # Add bigrams and trigrams to our feature matrix
 lyrics_studio_tokens <- tokens_ngrams(lyrics_studio_tokens, n = 1:3)
 
+# add meaningful doc names instead of text 1, text 2, ...
+doc_id = paste(1:nrow(lyrics_studio), lyrics_studio$song_id, sep = "_")
+docnames(lyrics_studio_tokens) <- doc_id
+
 # Create bag-of-words model (document frequency matrix/ dfm)
 lyrics_dfm = dfm(lyrics_studio_tokens, tolower = FALSE)
 
@@ -507,6 +511,7 @@ print(time_passed)
 
 saveRDS(lyrics_topicmodel_15, "./interim/lyrics_topicmodel_15.RDS")
 ```
+
 ```{r get model metrics, eval=TRUE, fig.dim = c(14,10), include=FALSE}
 # Get model metrics with topic doc package
 # See http://mallet.cs.umass.edu/diagnostics.php for interpretation of measures
@@ -565,11 +570,10 @@ ggplot(lyrics_topics_words, aes(order, beta, fill = factor(topic))) +
   coord_flip()
 ```
 </br></br>
-We asked the model to extract 15 topics from all the lyrics and 15 topics we got! Let's first look at how common they are and how they distribute over the individual records, and then zoom in a bit more.
+We asked the model to extract 15 topics from all the lyrics and 15 topics we got! Above you see the 15 topics with the words and their importance for the topic (indicated by the bars next to them). So we see, for example, topic 5 is basically only __hey little baby__, number 14 seems about __free time party in the sun__, and topic 3 is mainly around the word - * drumroll * - __love__ (including _move_, _sugar_, _hold_, and _sex_), They might not make a lot of sense (yet) so let's see how common the different topics are and if they are equally frequent across records.
 </br></br>
-And, note again that some of the words look strange because they have been modified to make it easier for a computer to understand them (e.g., _nature_ becomes _natur_, _something_ becomes _someth_)
-
-``` {r plot-topics2, eval=TRUE, fig.dim = c(8,6)}
+And, note again that some of the words look strange because they have been modified to make it easier for a computer to understand them (e.g., _nature_ becomes _natur_, _something_ becomes _someth_).
+``` {r plot-topics-by-frequency, eval=TRUE, fig.dim = c(8,6)}
 # Get Bet and Gamma values
 td_beta = tidy(lyrics_topicmodel_15, matrix=c("beta"))
 #td_beta
@@ -585,7 +589,7 @@ top_terms = td_beta %>%
   select(topic, term) %>%
   summarise(terms = list(term)) %>%
   mutate(terms = map(terms, paste, collapse = ", ")) %>% 
-  unnest()
+  unnest
 
 gamma_terms = td_gamma %>%
   group_by(topic) %>%
@@ -597,15 +601,64 @@ gamma_terms = td_gamma %>%
 
 gamma_terms %>%
   ggplot(aes(topic, gamma, label = terms, fill = topic)) +
-  geom_col(show.legend = FALSE, fill = punk_colors[4]) +
+  geom_col(show.legend = FALSE, fill = punk_colors[5]) +
   geom_text(hjust = 0, nudge_y = 0.0005, size = 3) +
   coord_flip() +
   scale_y_continuous(expand = c(0,0),
-                     limits = c(0, 0.13),
+                     limits = c(0, 0.17),
                      labels = percent_format()) +
   theme_ipsum() +
   labs(x = NULL, y = expression(gamma),
-       title = "Top 20 topics by prevalence in the 1 % stratified random sample",
-       subtitle = "With the top words that contribute to each topic")
+       title = "Proportion of topics in all the lyrics",
+       subtitle = "With the top words that make up each topic.")
+
+```
+</br>
+We see that there are no big differences in how often the topics occur in all of the lyrics. Let's see how they are distributed across the records.
+
+```{r compare-topics-by-record, eval = TRUE, fig.dim(10,12), results='hide'}
+# create topic names based on four most important terms
+topic_names = apply(terms(lyrics_topicmodel_15, 4), 2, paste, collapse = " ")
+topic_lookup = data.frame(topic_number = as.character(1:15),
+                           topic_names)  
+
+# Since the original data got reduced (rows that have only zeros get removed from 
+# when converting to topicmodel, we need to find out what data was actually 
+# modeled so we can assign topics to the lines again.
+
+# get indices based on the document ID
+data_in_model_ind = gsub("-*/._","", td_gamma$document) 
+gsub(".*:","",foo)
+
+data_in_model_ind = unique(as.numeric(data_in_model_ind))
+doc_names = unique(td_gamma$document)
+
+# subset the lyrics df and assign the document ID that is also used in the modeled data
+lyrics_subset = lyrics_studio[data_in_model_ind,]
+lyrics_subset$doc_id = doc_names
+
+# get the probabilities of all topic for each line of text
+topic_probs  = td_gamma %>%
+    pivot_wider(names_from = topic, values_from = gamma)
+
+# now we assign a topic to each document, based on the highest probability
+topic_list =  colnames(topic_probs[,2:16])[max.col(topic_probs[,2:16],ties.method="first")]
+lyrics_subset$topic_number = as.character(topic_list)
+
+lyrics_topics_summary = lyrics_subset %>% 
+  left_join(topic_lookup) %>% 
+  group_by(album, topic_names) %>% 
+  count()
+
+# Facet
+ggplot(lyrics_topics_summary, aes(fill = album, y=n, x=reorder(topic_names, n))) + 
+    geom_bar(position="stack", stat="identity") +
+    coord_flip() +
+    facet_wrap(~album, nrow = 3) +
+    theme_ipsum() +
+    theme(legend.position = "none") + 
+    labs(x = NULL, y = "Frequency",
+         title = "Do topics differ on Twitter, Facebook Pages, Reddit, and News?",
+         subtitle = "Proportion of topics by source")
 
 ```
