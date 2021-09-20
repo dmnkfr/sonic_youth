@@ -1024,6 +1024,7 @@ ggplot(predictions, aes(x=prediction,y=pred[2]))+
             theme_void()
 
 ```
+
 And because tensorflow models are super easy to put into production, I built a little [__shiny app__ ](https://dmnkfr.shinyapps.io/Swans_Sonic_Youth/) that allows you to check whether your own lyrics (or poems or thoughts or confessions) sound more like Swans or more like Sonic Youth.
 
 [![](images/example_gif.gif "Lyrics Classification Example")](https://dmnkfr.shinyapps.io/Swans_Sonic_Youth/)
