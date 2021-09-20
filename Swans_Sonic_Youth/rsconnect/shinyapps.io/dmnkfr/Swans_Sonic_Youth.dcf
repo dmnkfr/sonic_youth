@@ -5,9 +5,9 @@ account: dmnkfr
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 4629187
-bundleId: 5021560
+bundleId: 5052573
 url: https://dmnkfr.shinyapps.io/Swans_Sonic_Youth/
-when: 1631312516.89509
-lastSyncTime: 1631312516.8951
+when: 1632154831.23871
+lastSyncTime: 1632154831.23872
 asMultiple: FALSE
 asStatic: FALSE
