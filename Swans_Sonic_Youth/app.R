@@ -31,7 +31,7 @@ ui <- fluidPage(
             textInput("text_input", "", width = "100%", placeholder = "Confess here."),
             img(src = 'sy_swans.jpeg', width = '350'),
             h4("Confess your sins or thoughts or poems and see whether they sound more like Swans or more like Sonic Youth."),
-            h6("Interested? Read more about the lyrics of Swans and Sonic Youth here.")
+            h6("Read more about the lyrics of Swans and Sonic Youth at https://dmnkfr.github.io/sonic_youth/")
             
         ),
 
